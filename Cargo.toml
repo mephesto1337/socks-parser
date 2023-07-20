@@ -3,7 +3,13 @@ name = "socks-parser"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = ["async"]
+async = ["tokio"]
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 nom = "7"
+tokio  = { version = "1", features = ["rt", "io-util", "net"], optional = true }
+log = "0.4"

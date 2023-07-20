@@ -1,10 +1,36 @@
-mod common;
-pub mod request;
-pub mod response;
+pub mod common;
+mod request;
+mod response;
 
-pub use common::*;
+#[cfg(feature = "async")]
+mod client;
+#[cfg(feature = "async")]
+pub use client::Client;
+#[cfg(feature = "async")]
+mod server;
+pub use server::Server;
+
+pub use common::Version;
 
 pub use nom;
+
+pub mod v4 {
+    pub use crate::common::{
+        v4::{AddressType, Command},
+        Version,
+    };
+    pub use crate::request::v4::Request;
+    pub use crate::response::v4::{Response, Status};
+}
+
+pub mod v5 {
+    pub use crate::common::{
+        v5::{AddressType, AuthenticationMethod, Command},
+        Version,
+    };
+    pub use crate::request::v5::{Hello, Request};
+    pub use crate::response::v5::{Hello as HelloResponse, Response, Status};
+}
 
 trait Wire: Sized {
     fn encode_into(&self, buffer: &mut Vec<u8>);
@@ -29,18 +55,22 @@ macro_rules! impl_encoder_decoder {
 }
 
 impl_encoder_decoder!(
-    request::Hello,
-    encode_socks_request_hello,
-    decode_socks_request_hello
+    request::v5::Hello,
+    encode_socks5_request_hello,
+    decode_socks5_request_hello
 );
 impl_encoder_decoder!(
-    response::Hello,
-    encode_socks_response_hello,
-    decode_socks_response_hello
+    response::v5::Hello,
+    encode_socks5_response_hello,
+    decode_socks5_response_hello
 );
-impl_encoder_decoder!(request::Request, encode_socks_request, decode_socks_request);
 impl_encoder_decoder!(
-    response::Response,
-    encode_socks_response,
-    decode_socks_response
+    request::v5::Request,
+    encode_socks5_request,
+    decode_socks5_request
+);
+impl_encoder_decoder!(
+    response::v5::Response,
+    encode_socks5_response,
+    decode_socks5_response
 );
