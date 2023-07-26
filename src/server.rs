@@ -19,28 +19,41 @@ impl Server {
         Self { listener }
     }
 
-    pub async fn run<C, S, F>(self, handle_request: C) -> io::Result<()>
+    pub async fn run<HC, HS, S, FC, FS>(
+        self,
+        handle_request: HC,
+        handle_stream: HS,
+    ) -> io::Result<()>
     where
-        C: FnOnce(ConnectionRequest) -> F + Send + Clone + 'static,
-        F: Future<Output = io::Result<(S, Destination)>> + Send,
+        HC: FnOnce(ConnectionRequest) -> FC + Send + Clone + 'static,
+        HS: FnOnce(TcpStream, S) -> FS + Send + Clone + 'static,
+        FC: Future<Output = io::Result<(S, Destination)>> + Send,
+        FS: Future<Output = io::Result<()>> + Send,
         S: AsyncRead + AsyncWrite + Unpin + Send,
     {
         loop {
             let (stream, addr) = self.listener.accept().await?;
             log::info!("New connection from {addr}");
             let hc = handle_request.clone();
+            let hs = handle_stream.clone();
             tokio::spawn(async move {
-                if let Err(e) = Self::handle_client(stream, hc).await {
+                if let Err(e) = Self::handle_client(stream, hc, hs).await {
                     log::error!("Issue with client {addr}: {e}");
                 }
             });
         }
     }
 
-    async fn handle_client<C, S, F>(mut stream: TcpStream, handle_request: C) -> io::Result<()>
+    async fn handle_client<HC, HS, S, FC, FS>(
+        mut stream: TcpStream,
+        handle_request: HC,
+        handle_stream: HS,
+    ) -> io::Result<()>
     where
-        C: FnOnce(ConnectionRequest) -> F,
-        F: Future<Output = io::Result<(S, Destination)>>,
+        HC: FnOnce(ConnectionRequest) -> FC,
+        HS: FnOnce(TcpStream, S) -> FS,
+        FC: Future<Output = io::Result<(S, Destination)>>,
+        FS: Future<Output = io::Result<()>>,
         S: AsyncRead + AsyncWrite + Unpin,
     {
         let mut buffer = Vec::with_capacity(512);
@@ -49,20 +62,22 @@ impl Server {
 
         let (_, version) = Version::decode(&buffer[..n]).map_err(map_nom_error)?;
 
-        match version {
-            Version::Socks4 => Self::handle_client_v4(stream, buffer, handle_request).await,
-            Version::Socks5 => Self::handle_client_v5(stream, buffer, handle_request).await,
-        }
+        let remote_stream = match version {
+            Version::Socks4 => Self::handle_client_v4(&mut stream, buffer, handle_request).await?,
+            Version::Socks5 => Self::handle_client_v5(&mut stream, buffer, handle_request).await?,
+        };
+
+        handle_stream(stream, remote_stream).await
     }
 
-    async fn handle_client_v4<C, S, F>(
-        mut stream: TcpStream,
+    async fn handle_client_v4<HC, S, FC>(
+        stream: &mut TcpStream,
         mut buffer: Vec<u8>,
-        handle_request: C,
-    ) -> io::Result<()>
+        handle_request: HC,
+    ) -> io::Result<S>
     where
-        C: FnOnce(ConnectionRequest) -> F,
-        F: Future<Output = io::Result<(S, Destination)>>,
+        HC: FnOnce(ConnectionRequest) -> FC,
+        FC: Future<Output = io::Result<(S, Destination)>>,
         S: AsyncRead + AsyncWrite + Unpin,
     {
         use crate::v4::*;
@@ -70,7 +85,7 @@ impl Server {
         let (_, req) = Request::decode(&buffer).map_err(map_nom_error)?;
 
         let connection_request = (req.addr.clone(), req.port).into();
-        let mut s = match handle_request(connection_request).await {
+        match handle_request(connection_request).await {
             Ok((s, destination)) => {
                 let response = Response {
                     status: Status::Success,
@@ -83,8 +98,7 @@ impl Server {
                 buffer.clear();
                 response.encode_into(&mut buffer);
                 stream.write_all(&buffer[..]).await?;
-                drop(buffer);
-                s
+                Ok(s)
             }
             Err(e) => {
                 let response = Response {
@@ -98,23 +112,19 @@ impl Server {
                 buffer.clear();
                 response.encode_into(&mut buffer);
                 stream.write_all(&buffer[..]).await?;
-                return Err(e);
+                Err(e)
             }
-        };
-
-        tokio::io::copy_bidirectional(&mut stream, &mut s).await?;
-
-        Ok(())
+        }
     }
 
-    async fn handle_client_v5<C, S, F>(
-        mut stream: TcpStream,
+    async fn handle_client_v5<HC, S, FC>(
+        stream: &mut TcpStream,
         mut buffer: Vec<u8>,
-        handle_request: C,
-    ) -> io::Result<()>
+        handle_request: HC,
+    ) -> io::Result<S>
     where
-        C: FnOnce(ConnectionRequest) -> F,
-        F: Future<Output = io::Result<(S, Destination)>>,
+        HC: FnOnce(ConnectionRequest) -> FC,
+        FC: Future<Output = io::Result<(S, Destination)>>,
         S: AsyncRead + AsyncWrite + Unpin,
     {
         use crate::v5::*;
@@ -143,7 +153,7 @@ impl Server {
         let (_, req) = Request::decode(&buffer[..n]).map_err(map_nom_error)?;
 
         let connection_request = (req.addr.clone(), req.port).into();
-        let mut s = match handle_request(connection_request).await {
+        match handle_request(connection_request).await {
             Ok((s, destination)) => {
                 let response = Response {
                     status: Status::Success,
@@ -153,8 +163,7 @@ impl Server {
                 buffer.clear();
                 response.encode_into(&mut buffer);
                 stream.write_all(&buffer[..]).await?;
-                drop(buffer);
-                s
+                Ok(s)
             }
             Err(e) => {
                 let response = Response {
@@ -165,12 +174,8 @@ impl Server {
                 buffer.clear();
                 response.encode_into(&mut buffer);
                 stream.write_all(&buffer[..]).await?;
-                return Err(e);
+                Err(e)
             }
-        };
-
-        tokio::io::copy_bidirectional(&mut stream, &mut s).await?;
-
-        Ok(())
+        }
     }
 }

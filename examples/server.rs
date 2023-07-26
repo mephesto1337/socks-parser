@@ -26,6 +26,11 @@ async fn hanle_request(c: ConnectionRequest) -> io::Result<(TcpStream, Destinati
     Ok((stream, addr.into()))
 }
 
+async fn handle_stream(mut local: TcpStream, mut remote: TcpStream) -> io::Result<()> {
+    tokio::io::copy_bidirectional(&mut local, &mut remote).await?;
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> io::Result<()> {
     tracing_subscriber::fmt()
@@ -37,7 +42,7 @@ async fn main() -> io::Result<()> {
     let local_addr = listener.local_addr()?;
     log::info!("Listening on {local_addr}");
     let server = Server::new(listener);
-    server.run(hanle_request).await?;
+    server.run(hanle_request, handle_stream).await?;
 
     Ok(())
 }
