@@ -3,7 +3,7 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 use nom::{
     combinator::map,
     error::context,
-    number::streaming::{be_u16, be_u8},
+    number::complete::{be_u16, be_u8},
     sequence::tuple,
 };
 

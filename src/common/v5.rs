@@ -1,4 +1,4 @@
-use nom::{combinator::map, error::context, number::streaming::be_u8};
+use nom::{combinator::map, error::context, number::complete::be_u8};
 
 use crate::Wire;
 

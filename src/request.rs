@@ -2,10 +2,10 @@ pub mod v4 {
     use std::net::Ipv4Addr;
 
     use nom::{
-        bytes::streaming::{tag, take_while1},
+        bytes::complete::{tag, take_while1},
         combinator::{map, opt, verify},
         error::{context, ContextError},
-        number::streaming::{be_u16, be_u8},
+        number::complete::{be_u16, be_u8},
         sequence::{preceded, terminated, tuple},
     };
 
@@ -113,7 +113,7 @@ pub mod v5 {
         combinator::{map, verify},
         error::context,
         multi::length_count,
-        number::streaming::{be_u16, be_u8},
+        number::complete::{be_u16, be_u8},
         sequence::{preceded, tuple},
     };
 

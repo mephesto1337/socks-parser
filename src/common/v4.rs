@@ -1,6 +1,6 @@
 use std::{io, net::Ipv4Addr};
 
-use nom::{error::context, number::streaming::be_u8};
+use nom::{error::context, number::complete::be_u8};
 
 use crate::Wire;
 

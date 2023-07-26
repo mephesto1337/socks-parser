@@ -4,7 +4,7 @@ pub mod v4 {
     use nom::{
         combinator::verify,
         error::context,
-        number::streaming::{be_u16, be_u8},
+        number::complete::{be_u16, be_u8},
         sequence::{preceded, tuple},
     };
 
@@ -77,7 +77,7 @@ pub mod v5 {
     use nom::{
         combinator::{map, verify},
         error::context,
-        number::streaming::{be_u16, be_u8},
+        number::complete::{be_u16, be_u8},
         sequence::{preceded, tuple},
     };
 
