@@ -70,6 +70,7 @@ pub mod v4 {
         where
             E: nom::error::ParseError<&'i [u8]> + nom::error::ContextError<&'i [u8]>,
         {
+            log::trace!("v4::Request::decode({buffer:?})");
             let (rest, (command, port, (a, b, c, d), secret, name)) = context(
                 "Socks request",
                 preceded(
@@ -181,6 +182,7 @@ pub mod v5 {
         where
             E: nom::error::ParseError<&'i [u8]> + nom::error::ContextError<&'i [u8]>,
         {
+            log::trace!("v5::Request::decode({buffer:?})");
             let (rest, (command, _zero, addr, port)) = context(
                 "Request",
                 preceded(

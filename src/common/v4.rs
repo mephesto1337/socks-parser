@@ -32,7 +32,7 @@ impl Wire for Command {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum AddressType {
     IPv4(Ipv4Addr),
     DomainName(String),

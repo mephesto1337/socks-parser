@@ -9,7 +9,19 @@ async = ["tokio"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[[example]]
+name = "server"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }
+tracing-subscriber = { version = "0.3", features = [
+    "ansi",
+    "env-filter",
+    "fmt",
+    "std",
+] }
+
 [dependencies]
 nom = "7"
-tokio  = { version = "1", features = ["rt", "io-util", "net"], optional = true }
+tokio = { version = "1", features = ["rt", "io-util", "net"], optional = true }
 log = "0.4"

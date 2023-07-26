@@ -7,12 +7,12 @@ use nom::{
     combinator::{map, map_opt},
     error::context,
     multi::length_data,
-    number::streaming::be_u8,
+    number::complete::be_u8,
 };
 
 use crate::Wire;
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum AddressType {
     IPv4(Ipv4Addr),
     DomainName(String),

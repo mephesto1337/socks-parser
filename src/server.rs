@@ -1,11 +1,8 @@
-use std::{
-    io,
-    net::{Ipv4Addr, SocketAddr, SocketAddrV4},
-};
+use std::{future::Future, io};
 
-use crate::{Version, Wire};
+use crate::{ConnectionRequest, Destination, Version, Wire};
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
+    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::{TcpListener, TcpStream},
 };
 
@@ -22,19 +19,30 @@ impl Server {
         Self { listener }
     }
 
-    pub async fn run(self) -> io::Result<()> {
+    pub async fn run<C, S, F>(self, handle_request: C) -> io::Result<()>
+    where
+        C: FnOnce(ConnectionRequest) -> F + Send + Clone + 'static,
+        F: Future<Output = io::Result<(S, Destination)>> + Send,
+        S: AsyncRead + AsyncWrite + Unpin + Send,
+    {
         loop {
             let (stream, addr) = self.listener.accept().await?;
             log::info!("New connection from {addr}");
+            let hc = handle_request.clone();
             tokio::spawn(async move {
-                if let Err(e) = Self::handle_client(stream).await {
+                if let Err(e) = Self::handle_client(stream, hc).await {
                     log::error!("Issue with client {addr}: {e}");
                 }
             });
         }
     }
 
-    async fn handle_client(mut stream: TcpStream) -> io::Result<()> {
+    async fn handle_client<C, S, F>(mut stream: TcpStream, handle_request: C) -> io::Result<()>
+    where
+        C: FnOnce(ConnectionRequest) -> F,
+        F: Future<Output = io::Result<(S, Destination)>>,
+        S: AsyncRead + AsyncWrite + Unpin,
+    {
         let mut buffer = Vec::with_capacity(512);
 
         let n = stream.read_buf(&mut buffer).await?;
@@ -42,30 +50,50 @@ impl Server {
         let (_, version) = Version::decode(&buffer[..n]).map_err(map_nom_error)?;
 
         match version {
-            Version::Socks4 => Self::handle_client_v4(stream, buffer).await,
-            Version::Socks5 => Self::handle_client_v5(stream, buffer).await,
+            Version::Socks4 => Self::handle_client_v4(stream, buffer, handle_request).await,
+            Version::Socks5 => Self::handle_client_v5(stream, buffer, handle_request).await,
         }
     }
 
-    async fn handle_client_v4(mut stream: TcpStream, mut buffer: Vec<u8>) -> io::Result<()> {
+    async fn handle_client_v4<C, S, F>(
+        mut stream: TcpStream,
+        mut buffer: Vec<u8>,
+        handle_request: C,
+    ) -> io::Result<()>
+    where
+        C: FnOnce(ConnectionRequest) -> F,
+        F: Future<Output = io::Result<(S, Destination)>>,
+        S: AsyncRead + AsyncWrite + Unpin,
+    {
         use crate::v4::*;
 
         let (_, req) = Request::decode(&buffer).map_err(map_nom_error)?;
-        let connect_result = match req.addr {
-            AddressType::IPv4(ip4) => TcpStream::connect((ip4, req.port)).await,
-            AddressType::DomainName(ref n) => TcpStream::connect((n.as_str(), req.port)).await,
-        };
 
-        let mut s = match connect_result {
-            Ok(s) => s,
+        let connection_request = (req.addr.clone(), req.port).into();
+        let mut s = match handle_request(connection_request).await {
+            Ok((s, destination)) => {
+                let response = Response {
+                    status: Status::Success,
+                    addr: match destination.addr {
+                        crate::common::v5::AddressType::IPv4(ip4) => ip4,
+                        _ => 0u32.into(),
+                    },
+                    port: destination.port,
+                };
+                buffer.clear();
+                response.encode_into(&mut buffer);
+                stream.write_all(&buffer[..]).await?;
+                drop(buffer);
+                s
+            }
             Err(e) => {
                 let response = Response {
                     status: Status::Rejected,
                     addr: match req.addr {
                         AddressType::IPv4(ip4) => ip4,
-                        AddressType::DomainName(_) => Ipv4Addr::new(0, 0, 0, 0),
+                        _ => 0u32.into(),
                     },
-                    port: 0,
+                    port: req.port,
                 };
                 buffer.clear();
                 response.encode_into(&mut buffer);
@@ -74,31 +102,21 @@ impl Server {
             }
         };
 
-        let default_addr = || SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), req.port);
-        let remote_addr = match s.peer_addr() {
-            Ok(SocketAddr::V4(s4)) => s4,
-            Ok(SocketAddr::V6(_)) => default_addr(),
-            Err(_) => match req.addr {
-                AddressType::IPv4(ip4) => SocketAddrV4::new(ip4, req.port),
-                AddressType::DomainName(_) => default_addr(),
-            },
-        };
-        let response = Response {
-            status: Status::Success,
-            addr: *remote_addr.ip(),
-            port: remote_addr.port(),
-        };
-        buffer.clear();
-        response.encode_into(&mut buffer);
-        stream.write_all(&buffer[..]).await?;
-        drop(buffer);
-
         tokio::io::copy_bidirectional(&mut stream, &mut s).await?;
 
         Ok(())
     }
 
-    async fn handle_client_v5(mut stream: TcpStream, mut buffer: Vec<u8>) -> io::Result<()> {
+    async fn handle_client_v5<C, S, F>(
+        mut stream: TcpStream,
+        mut buffer: Vec<u8>,
+        handle_request: C,
+    ) -> io::Result<()>
+    where
+        C: FnOnce(ConnectionRequest) -> F,
+        F: Future<Output = io::Result<(S, Destination)>>,
+        S: AsyncRead + AsyncWrite + Unpin,
+    {
         use crate::v5::*;
 
         let (_, hello) = Hello::decode(&buffer).map_err(map_nom_error)?;
@@ -124,14 +142,20 @@ impl Server {
         let n = stream.read_buf(&mut buffer).await?;
         let (_, req) = Request::decode(&buffer[..n]).map_err(map_nom_error)?;
 
-        let connect_result = match req.addr {
-            AddressType::IPv4(ip4) => TcpStream::connect((ip4, req.port)).await,
-            AddressType::DomainName(ref n) => TcpStream::connect((n.as_str(), req.port)).await,
-            AddressType::IPv6(ip6) => TcpStream::connect((ip6, req.port)).await,
-        };
-
-        let mut s = match connect_result {
-            Ok(s) => s,
+        let connection_request = (req.addr.clone(), req.port).into();
+        let mut s = match handle_request(connection_request).await {
+            Ok((s, destination)) => {
+                let response = Response {
+                    status: Status::Success,
+                    addr: destination.addr,
+                    port: destination.port,
+                };
+                buffer.clear();
+                response.encode_into(&mut buffer);
+                stream.write_all(&buffer[..]).await?;
+                drop(buffer);
+                s
+            }
             Err(e) => {
                 let response = Response {
                     status: Status::GeneralFailure,
@@ -144,21 +168,6 @@ impl Server {
                 return Err(e);
             }
         };
-
-        let (addr, port) = match s.peer_addr() {
-            Ok(SocketAddr::V4(s4)) => (AddressType::IPv4(*s4.ip()), s4.port()),
-            Ok(SocketAddr::V6(s6)) => (AddressType::IPv6(*s6.ip()), s6.port()),
-            Err(_) => (req.addr, req.port),
-        };
-        let response = Response {
-            status: Status::Success,
-            addr,
-            port,
-        };
-        buffer.clear();
-        response.encode_into(&mut buffer);
-        stream.write_all(&buffer[..]).await?;
-        drop(buffer);
 
         tokio::io::copy_bidirectional(&mut stream, &mut s).await?;
 
