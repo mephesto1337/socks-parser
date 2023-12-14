@@ -149,7 +149,7 @@ pub struct ConnectionResponse {
     pub status: v5::Status,
 }
 
-trait Wire: Sized {
+pub trait Wire: Sized {
     fn encode_into(&self, buffer: &mut Vec<u8>);
     fn decode<'i, E>(input: &'i [u8]) -> nom::IResult<&'i [u8], Self, E>
     where
